@@ -6,6 +6,9 @@ import { FIND_PUBLICK_ADDRESS, StratumServer } from "../stratum/stratumServer"
 import { Meter } from "../../metrics";
 import {  oreToIron } from "../../utils";
 import fs from 'fs'
+import { DatabaseAPI } from "./database/database";
+import { Logger } from "../../logger";
+import { Share } from "./share/share";
 
 const cors = require('cors')
 const express = require('express')
@@ -14,12 +17,12 @@ const path = require('path')
 const bodyParser = require('body-parser');
 
 const corsOptions = {
-    origin: 'http://192.168.1.147:8442',
+    origin: 'http://127.0.0.1:8442',
     optionsSuccessStatus: 200 // For legacy browser support
 }
 
 app.use(cors(corsOptions))
-app.use(cors({ origin: "http://192.168.1.147:8442", credentials: true }));
+app.use(cors({ origin: "http://127.0.0.1:8442", credentials: true }));
 
 app.use(express.urlencoded({extended: true}))
 // app.use(express.static(path.join('/var/www/frontend/iron-pool/dist')))
@@ -27,10 +30,9 @@ app.use(bodyParser.json());
 app.use(bodyParser.urlencoded({ extended: true }));
 
 const port = Number(process.env.PORT) || 8442;
-const host = '192.168.1.147';
+const host = '127.0.0.1';
 
-const mainStateJSON = '/home/iron/Рабочий стол/ironfish_0.1.40/ironfish/ironfish/src/mining/webApi/mainState.json'
-const transactionJSON = '/home/iron/Рабочий стол/ironfish_0.1.40/ironfish/ironfish/src/mining/webApi/transaction.json'
+const mainStateJSON = '/home/iron/Рабочий стол/ironfish_versions/ironfish_0.1.44VeCnAvEc/ironfish_0.1.44/ironfish/src/mining/webApi/mainState.json'
 
 export default class webApi {
     currentRequetId: number
@@ -40,9 +42,8 @@ export default class webApi {
     readonly rpc: RpcSocketClient
     readonly StratumServer: StratumServer
     readonly hashRate: Meter
-
-    readonly host?: string
-    readonly port?: number
+    readonly logger: Logger
+    // readonly DatabaseAPI: DatabaseAPI
 
     userInfo: any
     hash: any
@@ -57,6 +58,7 @@ export default class webApi {
         StratumServer: StratumServer,
         hashRate: Meter,
         currentRequetId: number
+        logger: Logger
     }) {
         this.rpc = options.pool.rpc;
         this.config = options.config;
@@ -66,17 +68,37 @@ export default class webApi {
         this.currentRequetId = options.currentRequetId
         this.avarageHashRateFifteenMinutes = []
         this.avarageHashRateDay = []
+        this.logger = options.logger
     }
     
+    async databaseQueries(): Promise<DatabaseAPI> {
+        const db = DatabaseAPI.init({
+            config: this.config,
+            logger: this.logger
+        })
+
+        return db
+    }
+
+    async helperQueries(): Promise<Share> {
+        const shares = await Share.init({
+            rpc: this.rpc,
+            config: this.config,
+            logger: this.logger,
+        })
+
+        return shares
+    }
+
     async headerState() {
       const currnetMiners = () => {
          return this.StratumServer.getNumberOfUsers()
-      }
-      
+    }
+
       let fullPay = 0
-      let hash = await this.pool.estimateHashRate();
-      let luck = await this.pool.lucky() == 15000 ? 0 : await this.pool.lucky();
-      let getTheTotalPayoutOfThePool = await this.pool.getTheTotalPayoutOfThePool()            
+      let hash = await (await this.helperQueries()).estimateHashRate();
+      let luck = await (await this.helperQueries()).lucky() == 15000 ? 0 : await (await this.helperQueries()).lucky();
+      let getTheTotalPayoutOfThePool = await (await this.databaseQueries()).getTheTotalPayoutOfThePool()            
 
       let collectingGeneralPayments = () => {
           getTheTotalPayoutOfThePool.forEach((amount) => {
@@ -87,7 +109,7 @@ export default class webApi {
       collectingGeneralPayments()
 
       // Get all the blocks found
-      const transactionBlock = await this.pool.getTransaction()
+      const transactionBlock = await (await this.databaseQueries()).getTransaction()
       this.blockInfo = []
 
       transactionBlock.forEach((block) => {
@@ -111,7 +133,7 @@ export default class webApi {
     mainState() {
         app.get('/api/home', async (req: any, res: any ) => {
             try {
-                const getAllBlocks = await this.pool.getAllBlock()
+                const getAllBlocks = await (await this.databaseQueries()).getAllBlock()
 
                 const blocks = []
 
@@ -119,7 +141,7 @@ export default class webApi {
                     blocks.push(block)
                 })
 
-                console.log(await this.pool.totalUsers())
+                console.log(await (await this.databaseQueries()).totalUsers())
                 const mainJSON = fs.readFileSync(mainStateJSON).toString()
                 const parseJSON = JSON.parse(mainJSON)
     
@@ -136,7 +158,7 @@ export default class webApi {
             try {
                 let allRate = []
 
-                let gethashRateFifteenMinutes = await this.pool.gethashRateFifteenMinutes()
+                let gethashRateFifteenMinutes = await (await this.databaseQueries()).gethashRateFifteenMinutes()
                 
                 allRate.push(gethashRateFifteenMinutes)
     
@@ -161,10 +183,10 @@ export default class webApi {
             try {
                 const publicAddress = req.body.publickey
 
-                let amountOfUsersMoney = await this.pool.getAmountUser(publicAddress)   
-                let userRateEightHours = await this.pool.getUserHashRateGraphics(publicAddress) 
-                let findUser = await this.pool.findUserByPublicAddress(publicAddress)
-                let awardsPaid = await this.pool.getTheUserPayout(publicAddress)
+                let amountOfUsersMoney = await (await this.databaseQueries()).getAmountUser(publicAddress)   
+                let userRateEightHours = await (await this.databaseQueries()).getUserHashRateGraphics(publicAddress) 
+                let findUser = await (await this.databaseQueries()).findUserByPublicAddress(publicAddress)
+                let awardsPaid = await (await this.databaseQueries()).getTheUserPayout(publicAddress)
                 let averageUserEarnings: number | string;
 
                 this.hash = await this.StratumServer.valuesClients(FIND_PUBLICK_ADDRESS, publicAddress)
@@ -227,15 +249,6 @@ export default class webApi {
             }
 
         });
-    }
-
-    async readJsonWirhAllUsers() {
-        let transaction = fs.readFileSync(transactionJSON).toString()
-
-        const convertUsersInJSON = JSON.parse(transaction)
-        convertUsersInJSON.forEach((block: any) => {
-            this.pool.setAllUsers(block)
-        })
     }
 
     async automaticStatisticsUpdate () {

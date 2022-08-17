@@ -105,7 +105,8 @@
        rpc: options.rpc,
        StratumServer: this.stratum,
        hashRate: this.hashRate,
-       currentRequetId: this.nextMiningRequestId
+       currentRequetId: this.nextMiningRequestId,
+       logger: this.logger
       })
  
      this.difficulty = BigInt(this.config.get('poolDifficulty'))
